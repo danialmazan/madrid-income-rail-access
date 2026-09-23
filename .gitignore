@@ -1,0 +1,13 @@
+data/raw/
+data/interim/
+data/derived/
+frontend/node_modules/
+frontend/dist/
+site/
+frontend/public/data/
+frontend/public/tiles/
+frontend/public/assets/
+validation/generated/
+frontend/test-results/
+frontend/playwright-report/
+.DS_Store
