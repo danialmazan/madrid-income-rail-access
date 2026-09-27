@@ -13,13 +13,23 @@ python3 scripts/03_build_services.py
 Rscript scripts/04_score_components.R
 Rscript scripts/05_aggregate_publish.R
 Rscript scripts/06_build_tiles.R
+Rscript scripts/12_publish_score_origins.R
+Rscript scripts/11_build_bivariate_surface.R
+python3 scripts/10_build_component_chunks.py
+Rscript scripts/09_select_examples.R
+make local-roads
 npm ci --prefix frontend
 npm run build --prefix frontend
+Rscript scripts/13_test_tail_score.R
 Rscript scripts/07_validate.R
 python3 scripts/08_write_results.py
 ```
 
-The raw, interim, derived, validation, and frontend assets are generated locally. Source downloads are cached and checksummed. The site build is in `site/`. No release or website publication is performed by these commands.
+The raw, interim, derived, validation, and frontend assets are generated locally. If the component and station inputs have not changed, `SCORE_REUSE_DISTANCES=1 Rscript scripts/04_score_components.R` reuses the validated per-line distance tables for a scoring-formula rebuild; omit that flag when upstream geometry or station data changes. Source downloads are cached and checksummed. The site build is in `site/`. Building and publishing the site are separate steps. Use an HTTP preview (`npm run preview --prefix frontend`) for the MapLibre PMTiles map. When opened directly as `site/index.html`, the page loads nearby building polygons from spatially indexed gzip chunks, with a 2 km generalisation at wide zoom. Section 7 uses Photon address suggestions. Its HTTP map uses OpenFreeMap streets; direct-file viewing uses small local street chunks built from the Geofabrik Madrid OSM extract, so the street map and building selection do not depend on remote map tiles. Address search itself still requires network access. The local road index records the source URL and SHA-256; map attribution credits OpenStreetMap contributors and Geofabrik. The OpenFreeMap Liberty style is bundled locally for faster HTTP startup, and its upstream license notice is copied to `site/OPENFREEMAP_LICENSE.md`. Score origins are published as JSON and gzip JSON, with the compressed copy used by the address tool.
+
+## Publication
+
+GitHub Pages deploys the generated `site/` directory from a `site.tar.gz` release asset. The generated data and the building PMTiles file are too large to keep in the source Git history. After a validated build, package the contents of `site/` at the archive root, create a new release with that asset, and let the release-triggered Pages workflow deploy it. The project inherits `danielalmazan.com` from the account's main Pages site and is served at `/madrid-income-rail-access/`.
 
 [Methodology](METHODOLOGY.md) documents sources, keys, assumptions, and limits. [Results](RESULTS.md) is regenerated from the section and sensitivity outputs. The browser checks are available with `npm run test:e2e --prefix frontend` after the data and tiles have been built.
 

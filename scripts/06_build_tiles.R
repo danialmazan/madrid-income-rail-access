@@ -8,9 +8,13 @@ dir.create("frontend/public/tiles", recursive = TRUE, showWarnings = FALSE)
 dir.create("data/interim/tile_sources", recursive = TRUE, showWarnings = FALSE)
 scores <- readRDS("data/derived/component_scores.rds")
 if (nrow(scores) != 644613L) stop("Incomplete component scores")
-attrs <- scores[, .(component_key, CUSEC, pop = round(estimated_population, 2),
+attrs <- scores[, .(component_key, CUSEC, x, y, pop = round(estimated_population, 2),
                     entrance_score = round(rail_score_entrance, 4),
                     platform_score = round(rail_score_platform, 4))]
+income <- as.data.table(st_drop_geometry(readRDS("data/derived/section_scores.rds")))[,
+  .(CUSEC, income_median_equivalised, income_mean_equivalised, income_mean_per_person)]
+attrs <- merge(attrs, income, by = "CUSEC", all.x = TRUE, sort = FALSE)
+if (nrow(attrs) != nrow(scores)) stop("Component income join changed row count")
 parts_dir <- file.path(rail, "data/interim/phase2/components_by_municipality")
 paths <- list.files(parts_dir, pattern = "^components_[0-9]+\\.rds$", full.names = TRUE)
 if (!length(paths)) stop("No Rail Density component geometry files")
@@ -32,7 +36,11 @@ args <- c("--force", "--output", "frontend/public/tiles/components.pmtiles",
           "--layer", "components", "--minimum-zoom", "12", "--maximum-zoom", "16",
           "--drop-densest-as-needed", "--extend-zooms-if-still-dropping",
           "--include", "component_key", "--include", "CUSEC", "--include", "pop",
+          "--include", "x", "--include", "y",
           "--include", "entrance_score", "--include", "platform_score", source_path)
+args <- append(args, c("--include", "income_median_equivalised",
+                       "--include", "income_mean_equivalised",
+                       "--include", "income_mean_per_person"), after = length(args) - 1L)
 if (system2(tippecanoe, args) != 0) stop("Component tippecanoe build failed")
 
 surface <- rbindlist(list(
@@ -53,6 +61,7 @@ sf_surface <- st_transform(st_sf(surface[, .(geography, pop = round(pop), entran
                                           platform_score = round(platform_score, 4))], geometry = geom), 4326)
 surface_path <- "data/interim/tile_sources/surface.geojsons"
 st_write(sf_surface, surface_path, driver = "GeoJSONSeq", delete_dsn = TRUE, quiet = TRUE)
+st_write(sf_surface, "frontend/public/data/surface.geojson", driver = "GeoJSON", delete_dsn = TRUE, quiet = TRUE)
 args <- c("--force", "--output", "frontend/public/tiles/surface.pmtiles",
           "--layer", "surface", "--minimum-zoom", "5", "--maximum-zoom", "12",
           "--no-feature-limit", "--no-tile-size-limit", surface_path)

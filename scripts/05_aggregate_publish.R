@@ -41,7 +41,8 @@ fwrite(variant_sections, "data/derived/section_sensitivity.csv")
 metrics <- c("income_median_equivalised", "income_mean_equivalised", "income_mean_per_person")
 geographies <- c("region", "city")
 methods <- c("entrance", "platform")
-summaries <- list(); deciles <- list(); quintiles <- list(); cdfs <- list(); smoothers <- list()
+summaries <- list(); deciles <- list(); quintiles <- list(); cdfs <- list()
+distributions <- list(); reverse_groups <- list(); smoothers <- list()
 counter <- 0L
 for (geography in geographies) {
   keep <- if (geography == "city") sections$CUMUN == cfg$project$city_code else rep(TRUE, nrow(sections))
@@ -56,12 +57,15 @@ for (geography in geographies) {
       dt <- as.data.table(st_drop_geometry(subset))
       dt <- dt[is.finite(get(metric)) & section_population > 0]
       rho <- cor(dt[[metric]], dt[[score_col]], method = "spearman")
-      income_threshold <- weighted_quantile(dt[[metric]], dt$section_population, .5)
-      score_threshold <- weighted_quantile(dt[[score_col]], dt$section_population, .5)
-      dt[, quadrant := paste0(ifelse(get(metric) <= income_threshold, "lower_income", "higher_income"),
-                             "_", ifelse(get(score_col) <= score_threshold, "lower_access", "higher_access"))]
-      quad <- dt[, .(sections = .N, population = sum(section_population)), by = quadrant]
-      quad[, population_share := population / sum(dt$section_population)]
+      building <- merge(components_geo[, .(component_key, CUSEC, estimated_population,
+                                           building_score = get(score_col))],
+                        dt[, .(CUSEC, income = get(metric))], by = "CUSEC", sort = FALSE)
+      income_threshold <- weighted_quantile(building$income, building$estimated_population, .5)
+      score_threshold <- weighted_quantile(building$building_score, building$estimated_population, .5)
+      building[, quadrant := paste0(ifelse(income <= income_threshold, "lower_income", "higher_income"),
+                                   "_", ifelse(building_score <= score_threshold, "lower_access", "higher_access"))]
+      quad <- building[, .(components = .N, population = sum(estimated_population)), by = quadrant]
+      quad[, population_share := population / sum(building$estimated_population)]
       summaries[[counter]] <- list(geography = geography, income_metric = metric, method = method,
         sections = nrow(dt), population = sum(dt$section_population), spearman_rho = rho,
         income_threshold = income_threshold, score_threshold = score_threshold,
@@ -87,13 +91,18 @@ for (geography in geographies) {
       smoothers[[counter]] <- data.table(geography = geography, income_metric = metric,
         method = method, income = grid, score = as.numeric(predict(fit, newdata = data.frame(x = grid))))
       cdfs[[counter]] <- score_cdf(components_geo, g5, method, geography, metric)
+      distributions[[counter]] <- score_distribution(components_geo, g5, method, geography, metric)
+      reverse_groups[[counter]] <- reverse_income_distribution(components_geo, g5, method, geography, metric)
     }
   }
 }
 dec <- rbindlist(deciles); quin <- rbindlist(quintiles); cdf <- rbindlist(cdfs); smooth <- rbindlist(smoothers)
+dist <- rbindlist(distributions); reverse <- rbindlist(reverse_groups)
 fwrite(dec, "data/derived/income_deciles.csv")
 fwrite(quin, "data/derived/income_quintiles.csv")
 fwrite(cdf, "data/derived/score_cdfs.csv")
+fwrite(dist, "data/derived/score_distributions.csv")
+fwrite(reverse, "data/derived/reverse_income_distributions.csv")
 fwrite(smooth, "data/derived/scatter_smoothers.csv")
 
 sens_rows <- list(); k <- 0L
@@ -103,15 +112,21 @@ for (geography in geographies) for (metric in metrics) for (method in methods) {
   scores <- variant_sections[match(base$CUSEC, CUSEC)]
   main <- scores[[paste0(method, "_d600_p2.5")]]
   g10 <- income_groups(sections[match(base$CUSEC, sections$CUSEC), ], metric, 10L)
-  main_income_threshold <- weighted_quantile(base[[metric]], base$section_population, .5)
-  main_score_threshold <- weighted_quantile(main, base$section_population, .5)
-  main_quadrant <- (base[[metric]] > main_income_threshold) * 2L + (main > main_score_threshold)
+  comp_base <- merge(components[CUSEC %in% base$CUSEC,
+                                .(component_key, CUSEC, estimated_population)],
+                     base[, .(CUSEC, income = get(metric))], by = "CUSEC", sort = FALSE)
+  variant_components <- variants[[method]][match(comp_base$component_key, components$component_key), , drop = FALSE]
+  main_income_threshold <- weighted_quantile(comp_base$income, comp_base$estimated_population, .5)
+  main_building <- variant_components[, "d600_p2.5"]
+  main_score_threshold <- weighted_quantile(main_building, comp_base$estimated_population, .5)
+  main_quadrant <- (comp_base$income > main_income_threshold) * 2L + (main_building > main_score_threshold)
   for (name in grep(paste0("^", method, "_"), names(scores), value = TRUE)) {
     value <- scores[[name]]
-    score_threshold <- weighted_quantile(value, base$section_population, .5)
-    variant_quadrant <- (base[[metric]] > main_income_threshold) * 2L + (value > score_threshold)
-    changed_population_share <- sum(base$section_population[variant_quadrant != main_quadrant]) /
-                                sum(base$section_population)
+    building_value <- variant_components[, sub(paste0("^", method, "_"), "", name)]
+    score_threshold <- weighted_quantile(building_value, comp_base$estimated_population, .5)
+    variant_quadrant <- (comp_base$income > main_income_threshold) * 2L + (building_value > score_threshold)
+    changed_population_share <- sum(comp_base$estimated_population[variant_quadrant != main_quadrant]) /
+                                sum(comp_base$estimated_population)
     g <- merge(data.table(CUSEC = base$CUSEC, section_population = base$section_population,
                           score = value), g10, by = "CUSEC")
     gap <- g[group == 10L, weighted.mean(score, section_population)] -
@@ -138,7 +153,8 @@ payload <- list(meta = list(income_year = 2023, income_section_reference = "2024
                              distance_type = "straight_line_euclidean", component_count = nrow(components),
                              section_count = nrow(sections)),
                 sections = section_public, summaries = summaries, deciles = dec,
-                quintiles = quin, cdfs = cdf, smoothers = smooth)
+                quintiles = quin, cdfs = cdf, distributions = dist,
+                reverse_groups = reverse, smoothers = smooth)
 write_json(payload, "frontend/public/data/analysis.json", auto_unbox = TRUE, digits = 10, na = "null")
 file.copy("data/derived/section_scores.csv", "frontend/public/data/section_scores.csv", overwrite = TRUE)
 file.copy("validation/generated/sensitivity_summary.csv", "frontend/public/data/sensitivity_summary.csv", overwrite = TRUE)

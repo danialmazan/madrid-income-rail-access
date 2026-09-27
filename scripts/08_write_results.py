@@ -57,13 +57,13 @@ for geography, name in [('region', 'Comunidad de Madrid'), ('city', 'Madrid muni
     lines.append(f'| {name} | {r["sections"]:,} | {r["spearman_rho"]:.3f} | {decile_gap(geography):+.3f} | {min(share)*100:.2f}–{max(share)*100:.2f}% |')
 lines += [
     '',
-    'The main score uses entrances, `D50=600 m`, `p=2.5`, and a `0.10` second-station contribution for the same line. INE median income per consumption unit is the income measure. Six sections with 498 modelled residents have no value for this measure and are excluded from this table.',
+    'The main score uses entrances, `D50=600 m`, `p=2.5`, a `0.10` second-station contribution for the same line, three fully protected nearest lines, and a distant-line tail cap of `f(D*)`. INE median income per consumption unit is the income measure. Six sections with 498 modelled residents have no value for this measure and are excluded from this table.',
     '',
     '## Fixed sensitivity grid',
     '',
     'The nine distance-decay combinations and four duplicate factors were specified before viewing the association. Ranges below cover the nine distance-decay combinations only. Full values, including duplicate-factor variants and all three income measures, are in `validation/generated/sensitivity_summary.csv`.',
     '',
-    '| Geography | Origin | Income–score ρ | Score-rank ρ vs main | Decile score gap | Residents changing Four Madrids quadrant |',
+    '| Geography | Rail access point | Income–score ρ | Score-rank ρ vs main | Decile score gap | Residents changing Four Madrids quadrant |',
     '| --- | --- | ---: | ---: | ---: | ---: |',
 ]
 for geography, name in [('region', 'Comunidad'), ('city', 'Madrid city')]:
@@ -72,12 +72,26 @@ for geography, name in [('region', 'Comunidad'), ('city', 'Madrid city')]:
         lines.append(f'| {name} | {method} | {bounds(v,"income_score_spearman")} | {bounds(v,"rank_spearman_vs_main")} | {bounds(v,"top_bottom_decile_gap")} | {bounds_percent(v,"four_madrids_changed_population_share")} |')
 lines += [
     '',
+    '## Distant-line sensitivity',
+    '',
+    'The protected-line and tail-cap grid crosses `k ∈ {3, 4}` with `η ∈ {0.5, 1, 2}`. The table highlights three changes from the main `k3_eta1_0` score; all six combinations for each geography, income measure and access point are in the sensitivity CSV.',
+    '',
+    '| Geography | Rail access point | Variant | Income–score ρ | Score-rank ρ vs main | Residents changing Four Madrids quadrant |',
+    '| --- | --- | --- | ---: | ---: | ---: |',
+]
+for geography, name in [('region', 'Comunidad'), ('city', 'Madrid city')]:
+    for method in ['entrance', 'platform']:
+        for variant in ['k3_eta0_5', 'k4_eta1_0', 'k3_eta2_0']:
+            item = next(x for x in sensitivity if x['geography'] == geography and x['income_metric'] == metric and x['method'] == method and x['variant'] == variant)
+            lines.append(f'| {name} | {method} | `{variant}` | {float(item["income_score_spearman"]):.3f} | {float(item["rank_spearman_vs_main"]):.3f} | {100*float(item["four_madrids_changed_population_share"]):.1f}% |')
+lines += [
+    '',
     'The platform specification is a representation check using only platforms linked to confirmed boarding lines. Its main-specification section correlations are '+
     f'{row("region","platform")["spearman_rho"]:.3f} (region) and {row("city","platform")["spearman_rho"]:.3f} (city).',
     '',
     '## Reading the maps',
     '',
-    'The component score map uses actual component polygons at close zoom. A 2 km population-weighted surface is used at wider zoom for performance and must not be read as another observation unit. Income remains a 2024 census-section attribute.',
+    'The rail-score and Four Madrids maps use building polygons at close zoom. Buildings inherit income from their 2024 census section. At wider zoom, 2 km cells provide a display generalisation: a population-weighted score for the rail map and the dominant building-level quadrant for the combined map. The income-only map uses 2024 census sections.',
     '',
 ]
 (root / 'RESULTS.md').write_text('\n'.join(lines))

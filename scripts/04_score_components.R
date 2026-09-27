@@ -1,6 +1,7 @@
 #!/usr/bin/env Rscript
 suppressPackageStartupMessages({library(sf); library(terra); library(data.table); library(yaml); library(jsonlite)})
 cfg <- yaml::read_yaml("config.yml")
+source("R/score_tail.R")
 rail <- Sys.getenv("RAIL_DENSITY_ROOT", cfg$project$rail_density_root)
 component <- readRDS("data/interim/component_section_2024.rds")
 if (nrow(component) != 644613L && Sys.getenv("SCORE_LIMIT") == "") stop("Component contract changed")
@@ -25,9 +26,17 @@ pval <- as.numeric(cfg$score$p_sensitivity)
 grid <- CJ(d50_m = d50, p = pval)
 grid[, variant := paste0("d", d50_m, "_p", format(p, nsmall = 1))]
 factors <- as.numeric(cfg$score$duplicate_sensitivity)
-variant_names <- c(grid$variant, paste0("q", gsub("\\.", "_", format(factors, nsmall = 2))))
+factor_names <- paste0("q", gsub("\\.", "_", format(factors, nsmall = 2)))
+tail_grid <- CJ(protected_lines = as.integer(cfg$score$protected_line_sensitivity),
+                eta = as.numeric(cfg$score$tail_cap_sensitivity))
+tail_grid[, variant := paste0("k", protected_lines, "_eta",
+                               gsub("\\.", "_", format(eta, nsmall = 1)))]
+variant_names <- c(grid$variant, factor_names, tail_grid$variant)
 main_name <- "d600_p2.5"
 if (!(main_name %in% variant_names)) stop("Main sensitivity specification missing")
+if (cfg$score$protected_line_count != 3L || cfg$score$tail_cap_multiplier != 1 ||
+    cfg$score$d50_m != 600 || cfg$score$p != 2.5 || cfg$score$duplicate_factor != 0.1)
+  stop("Main score parameters changed; update main-specification contract explicitly")
 scores <- list(
   entrance = matrix(0, nrow = n, ncol = length(variant_names), dimnames = list(NULL, variant_names)),
   platform = matrix(0, nrow = n, ncol = length(variant_names), dimnames = list(NULL, variant_names))
@@ -82,10 +91,12 @@ nearest_two <- function(row_ids, origin_indices, station_count) {
   result[]
 }
 
-distance_decay <- function(d, half, shape) ifelse(is.finite(d), 1 / (1 + (d / half)^shape), 0)
 for (method in c("entrance", "platform")) {
   dir.create(file.path("data/interim/line_distances", method), recursive = TRUE, showWarnings = FALSE)
-  for (line in line_ids) {
+  first_matrix <- second_matrix <- matrix(Inf, nrow = n, ncol = length(line_ids),
+                                           dimnames = list(NULL, line_ids))
+  for (line_index in seq_along(line_ids)) {
+    line <- line_ids[line_index]
     station_ids <- services[line_id == line, unique(station_id)]
     if (method == "entrance") {
       origin_indices <- which(origins$point_method == "entrance" & origins$station_id %in% station_ids)
@@ -94,34 +105,56 @@ for (method in c("entrance", "platform")) {
       origin_indices <- which(origins$point_method == "platform" & origins$origin_id %in% ids)
     }
     if (any(!station_ids %in% origins$station_id[origin_indices])) stop("Missing line-specific station origin: ", method, "/", line)
-    out <- vector("list", ceiling(n / batch_size))
-    for (j in seq_along(out)) {
-      rows <- seq.int((j - 1L) * batch_size + 1L, min(j * batch_size, n))
-      out[[j]] <- nearest_two(rows, origin_indices, length(station_ids))
+    distance_path <- file.path("data/interim/line_distances", method, paste0(line, ".rds"))
+    if (Sys.getenv("SCORE_REUSE_DISTANCES") == "1" && file.exists(distance_path)) {
+      distances <- readRDS(distance_path)
+    } else {
+      out <- vector("list", ceiling(n / batch_size))
+      for (j in seq_along(out)) {
+        rows <- seq.int((j - 1L) * batch_size + 1L, min(j * batch_size, n))
+        out[[j]] <- nearest_two(rows, origin_indices, length(station_ids))
+      }
+      distances <- rbindlist(out)
+      if (nrow(distances) != n || anyDuplicated(distances$row)) stop("Component-line distance coverage failed")
+      setorder(distances, row)
+      distances[, row := NULL]
+      distances[, component_key := component$component_key]
+      setcolorder(distances, c("component_key", "first_station_id", "first_distance_m", "second_station_id", "second_distance_m"))
+      saveRDS(distances, distance_path, compress = "gzip")
     }
-    distances <- rbindlist(out)
-    if (nrow(distances) != n || anyDuplicated(distances$row)) stop("Component-line distance coverage failed")
-    setorder(distances, row)
-    distances[, row := NULL]
-    distances[, component_key := component$component_key]
-    setcolorder(distances, c("component_key", "first_station_id", "first_distance_m", "second_station_id", "second_distance_m"))
-    saveRDS(distances, file.path("data/interim/line_distances", method, paste0(line, ".rds")), compress = "gzip")
-    for (v in seq_len(nrow(grid))) {
-      first <- distance_decay(distances$first_distance_m, grid$d50_m[v], grid$p[v])
-      second <- distance_decay(distances$second_distance_m, grid$d50_m[v], grid$p[v])
-      scores[[method]][, grid$variant[v]] <- scores[[method]][, grid$variant[v]] + first + 0.1 * second
-    }
-    first <- distance_decay(distances$first_distance_m, 600, 2.5)
-    second <- distance_decay(distances$second_distance_m, 600, 2.5)
-    for (v in seq_along(factors)) {
-      label <- paste0("q", gsub("\\.", "_", format(factors[v], nsmall = 2)))
-      scores[[method]][, label] <- scores[[method]][, label] + first + factors[v] * second
-    }
-    message(method, " / ", line, " (", match(line, line_ids), "/", length(line_ids), ")")
+    if (nrow(distances) != n || !identical(distances$component_key, component$component_key))
+      stop("Cached distance rows do not match components: ", method, "/", line)
+    first_matrix[, line_index] <- distances$first_distance_m
+    second_matrix[, line_index] <- distances$second_distance_m
+    message(method, " / ", line, " (", line_index, "/", length(line_ids), ")")
+  }
+  threshold_cache <- lapply(sort(unique(tail_grid$protected_lines)), function(k)
+    protected_distance(first_matrix, k, cfg$score$protected_distance_floor_m))
+  names(threshold_cache) <- as.character(sort(unique(tail_grid$protected_lines)))
+  main_threshold <- threshold_cache[[as.character(cfg$score$protected_line_count)]]
+  for (v in seq_len(nrow(grid))) {
+    scores[[method]][, grid$variant[v]] <- score_tail_components(
+      first_matrix, second_matrix, main_threshold, grid$d50_m[v], grid$p[v],
+      cfg$score$duplicate_factor, cfg$score$tail_cap_multiplier)$total
+  }
+  for (v in seq_along(factors)) {
+    scores[[method]][, factor_names[v]] <- score_tail_components(
+      first_matrix, second_matrix, main_threshold, cfg$score$d50_m, cfg$score$p,
+      factors[v], cfg$score$tail_cap_multiplier)$total
+  }
+  for (v in seq_len(nrow(tail_grid))) {
+    scores[[method]][, tail_grid$variant[v]] <- score_tail_components(
+      first_matrix, second_matrix,
+      threshold_cache[[as.character(tail_grid$protected_lines[v])]],
+      cfg$score$d50_m, cfg$score$p, cfg$score$duplicate_factor,
+      tail_grid$eta[v])$total
   }
 }
 if (max(abs(scores$entrance[, main_name] - scores$entrance[, "q0_10"])) > 1e-9 ||
-    max(abs(scores$platform[, main_name] - scores$platform[, "q0_10"])) > 1e-9) stop("Main score/factor sensitivity mismatch")
+    max(abs(scores$platform[, main_name] - scores$platform[, "q0_10"])) > 1e-9 ||
+    max(abs(scores$entrance[, main_name] - scores$entrance[, "k3_eta1_0"])) > 1e-9 ||
+    max(abs(scores$platform[, main_name] - scores$platform[, "k3_eta1_0"])) > 1e-9)
+  stop("Main score sensitivity aliases differ")
 if (any(!is.finite(scores$entrance)) || any(!is.finite(scores$platform))) stop("Non-finite score")
 result <- component[, .(component_key, CUSEC, CUMUN, estimated_population, x, y, support_type)]
 result[, `:=`(rail_score_entrance = scores$entrance[, main_name], rail_score_platform = scores$platform[, main_name])]
