@@ -29,7 +29,7 @@ The raw, interim, derived, validation, and frontend assets are generated locally
 
 ## Publication
 
-GitHub Pages deploys the generated `site/` directory from a `site.tar.gz` release asset. The generated data and the building PMTiles file are too large to keep in the source Git history. After a validated build, package the contents of `site/` at the archive root, create a new release with that asset, and let the release-triggered Pages workflow deploy it. The project inherits `danielalmazan.com` from the account's main Pages site and is served at `/madrid-income-rail-access/`.
+GitHub Pages deploys the generated `site/` directory from a `site.tar.gz` release asset. The generated data and the building PMTiles file are too large to keep in the source Git history. After a validated build, package the contents of `site/` at the archive root, create a new release with that asset, then run the Pages workflow on `main` (`gh workflow run pages.yml --ref main`). The project inherits `danielalmazan.com` from the account's main Pages site and is served at `/madrid-income-rail-access/`.
 
 [Methodology](METHODOLOGY.md) documents sources, keys, assumptions, and limits. [Results](RESULTS.md) is regenerated from the section and sensitivity outputs. The browser checks are available with `npm run test:e2e --prefix frontend` after the data and tiles have been built.
 
