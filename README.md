@@ -34,3 +34,7 @@ GitHub Pages deploys the generated `site/` directory from a `site.tar.gz` releas
 [Methodology](METHODOLOGY.md) documents sources, keys, assumptions, and limits. [Results](RESULTS.md) is regenerated from the section and sensitivity outputs. The browser checks are available with `npm run test:e2e --prefix frontend` after the data and tiles have been built.
 
 Income is an area measure. Component income labels are inherited only for mapping; comparisons use one observation per 2024 census section. Population is modelled from the Rail Density 2025 allocation. Distances are straight-line EPSG:25830 distances, not walking routes. The Rail Access Score is a constructed index, not an INE or CRTM statistic.
+
+## Web analytics
+
+The HTML entry point (`frontend/index.html`) loads the supplied Cloudflare Web Analytics module once before the closing body tag. Future production builds retain that installation. The analytics-only `analytics-2026-11-10` release keeps the existing application and data files; only its `index.html` content changed. Deployment continues through the existing release-archive Pages workflow.
