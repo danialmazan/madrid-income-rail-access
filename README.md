@@ -38,3 +38,7 @@ Income is an area measure. Component income labels are inherited only for mappin
 ## Web analytics
 
 The HTML entry point (`frontend/index.html`) loads the supplied Cloudflare Web Analytics module once before the closing body tag. Future production builds retain that installation. The analytics-only `analytics-2026-11-10` release keeps the existing application and data files; only its `index.html` content changed. Deployment continues through the existing release-archive Pages workflow.
+
+## Browser analytics opt-out
+
+The HTML entry loads Cloudflare Web Analytics only when `localStorage.getItem("exclude_cf_analytics") !== "1"`. To exclude this browser profile, run `localStorage.setItem("exclude_cf_analytics", "1"); location.reload();` in the site console. To restore tracking, run `localStorage.removeItem("exclude_cf_analytics"); location.reload();`. The preference persists for the exact origin and is shared by all project paths under `https://danielalmazan.com`. Other browsers and profiles retain normal tracking. Reload existing tabs after changing it. No visible settings or other analytics integrations are changed.
